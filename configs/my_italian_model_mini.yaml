@@ -2,14 +2,13 @@ model:
   name: "UsefulSensors/moonshine-tiny"
 
 dataset:
-  name: "./data/italian_phoneme_local"
+  path: "./data/italian_mini"
   language: "it"
   train_split: "train"
-  test_split: "train"
-  text_column: "text"
+  test_split: "test"
+  text_column: "transcript"
   use_auth_token: false
 
-# AGGIUNGI QUESTA SEZIONE MANCANTE
 audio:
   min_duration: 0.5
   max_duration: 30.0
@@ -26,6 +25,7 @@ training:
   gradient_accumulation_steps: 1
   max_grad_norm: 1.0
   num_train_epochs: 3
+  max_steps: -1
   learning_rate: 0.00005
   warmup_steps: 5
   

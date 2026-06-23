@@ -174,9 +174,10 @@ class MoonshineSeq2SeqTrainer(Seq2SeqTrainer):
     2. Use phase-specific generation parameters
     """
 
-    def __init__(self, *args, generation_config=None, **kwargs):
+    def __init__(self, *args, generation_config=None, greedy_eval=True, **kwargs):
         super().__init__(*args, **kwargs)
         self.generation_config = generation_config or {}
+        self.greedy_eval = greedy_eval
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         """Custom prediction step for Moonshine."""
@@ -214,8 +215,11 @@ class MoonshineSeq2SeqTrainer(Seq2SeqTrainer):
             # Generate transcriptions with phase-specific parameters
             generation_kwargs = {
                 "max_new_tokens": max_new_tokens,
+                "max_length": None,
                 **self.generation_config
             }
+            if self.greedy_eval:
+                generation_kwargs["num_beams"] = 1
 
             # Moonshine generate expects input_values (not input_features)
             generated_tokens = model.generate(
@@ -333,42 +337,38 @@ def main():
     print("="*60)
 
     data_loader = MoonshineDataLoader.from_config(config)
-    #dataset_dict = data_loader.load_dataset()
-    # Sostituzione della riga 333
-    from datasets import load_from_disk
-    dataset_local = load_from_disk("./data/italian_phoneme_local")
-    
 
+    # Legge il percorso del dataset dal config (campo 'path' per dataset locali)
+    dataset_config = config.get('dataset', {})
+    dataset_path = dataset_config.get('path')
 
-    
-    from datasets import load_from_disk, DatasetDict
-    
-    # 1. Carica il dataset locale
-    dataset_local = load_from_disk("./data/italian_phoneme_local")
-    
-    # 2. Rinomina la colonna se necessario
-    if 'sentence' not in dataset_local.column_names and 'transcript' in dataset_local.column_names:
-        dataset_local = dataset_local.rename_column('transcript', 'sentence')
+    if dataset_path:
+        from datasets import load_from_disk, DatasetDict
+        dataset_local = load_from_disk(dataset_path)
 
-    # 3. Crea l'oggetto DatasetDict formale
-    # Assicuriamoci che abbia i metodi richiesti dal framework
-    dataset_dict = DatasetDict({
-        "train": dataset_local,
-        "test": dataset_local 
-    })
-    
-    print("🚀 DatasetDict creato correttamente. Pronti per il salvataggio.")
+        if isinstance(dataset_local, DatasetDict):
+            # Dataset già con split train/test (es. mini dataset)
+            dataset_dict = dataset_local
+            print(f"📊 Dataset caricato: {len(dataset_dict['train']):,} train + {len(dataset_dict['test']):,} eval")
+        else:
+            # Dataset singolo → split manuale (primi 500 per test, resto per train)
+            dataset_local = dataset_local.shuffle(seed=42)
+            dataset_dict = DatasetDict({
+                "train": dataset_local.select(range(500, len(dataset_local))),
+                "test": dataset_local.select(range(500))
+            })
+            print(f"📊 Dataset split: {len(dataset_dict['train']):,} train + {len(dataset_dict['test']):,} eval")
+    else:
+        # Fallback: carica tramite data_loader (per dataset remoti tipo Common Voice)
+        dataset_dict = data_loader.load_dataset()
+        print(f"📊 Dataset caricato via data_loader: {len(dataset_dict['train']):,} train + {len(dataset_dict['test']):,} eval")
 
-
-
-    # Rinominazione corretta in base al tuo dataset
+    # Rinomina la colonna testo se necessario ('transcript' → 'sentence')
+    text_column = dataset_config.get('text_column', 'transcript')
     for split in dataset_dict:
-        # Scegli 'transcript' se vuoi trascrizione normale, o 'phoneme' per i fonemi
-        target_col = 'transcript' 
-        
-        if 'sentence' not in dataset_dict[split].column_names and target_col in dataset_dict[split].column_names:
-            dataset_dict[split] = dataset_dict[split].rename_column(target_col, 'sentence')
-            print(f"✅ Rinominata colonna '{target_col}' in 'sentence' per lo split: {split}")
+        if 'sentence' not in dataset_dict[split].column_names and text_column in dataset_dict[split].column_names:
+            dataset_dict[split] = dataset_dict[split].rename_column(text_column, 'sentence')
+            print(f"✅ Rinominata colonna '{text_column}' in 'sentence' per lo split: {split}")
 
     # Test mode: use only 500 samples (enough to get samples in various duration ranges)
     if args.test_mode:
@@ -665,14 +665,16 @@ def main():
         model = model.float()
         trainer.model = model
 
+    trainer.greedy_eval = False  # use beam search for final eval
     try:
         results = trainer.evaluate()
     except RuntimeError as e:
         if "should be the same" in str(e):
             print(f"\n⚠️  Final evaluation skipped due to dtype mismatch (this is a known issue with FP16 training)")
             print(f"Your model was saved successfully to: {training_args.output_dir}/final")
+            dataset_ref = config['dataset'].get('path') or config['dataset'].get('name', '')
             print(f"\nYou can evaluate it separately with:")
-            print(f"  python scripts/evaluate.py --model {training_args.output_dir}/final --dataset {config['dataset']['name']} --split test")
+            print(f"  python scripts/evaluate.py --model {training_args.output_dir}/final --dataset {dataset_ref} --split test")
             results = None
         else:
             raise
