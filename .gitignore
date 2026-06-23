@@ -1,0 +1,102 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.virtualenv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# Training outputs
+results-*/
+runs/
+logs/
+checkpoints/
+wandb/
+tensorboard/
+
+# Model files (too large for git)
+*.bin
+*.onnx
+*.ort
+*.safetensors
+*.pt
+*.pth
+
+# Dataset files
+data/
+datasets/
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Test outputs
+test_samples/
+test_eval_*.json
+test_inference_*.json
+benchmark_*.json
+
+# Documentation builds
+docs/_build/
+docs/.doctrees/
+
+# Temporary files
+*.log
+*.tmp
+.cache/
+*.pyc
+
+# System files
+Thumbs.db
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Distribution / packaging
+*.whl
+
+# PyInstaller
+*.manifest
+*.spec

@@ -1,0 +1,8 @@
+# Optional dependencies for live transcription mode
+# Install with: uv pip install -r requirements-live.txt
+
+# Live audio capture
+sounddevice>=0.5.0
+
+# Voice Activity Detection (loaded via torch.hub, no pip install needed)
+# Note: Silero VAD is automatically downloaded via torch.hub.load() on first use

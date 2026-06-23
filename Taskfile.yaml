@@ -1,0 +1,149 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  VENV_DIR: .venv
+  PYTHON: "{{.VENV_DIR}}/bin/python"
+  DATA_DIR: ./data/mls_italian_segmented
+  MINI_DATA_DIR: ./data/italian_mini
+  OUTPUT_DIR: ./results-moonshine-it
+  MINI_OUTPUT_DIR: ./results-moonshine-it-mini
+  CONFIG_PATH: configs/my_italian_model.yaml
+  MINI_CONFIG_PATH: configs/my_italian_model_mini.yaml
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: Create local virtual environment and install native Apple Silicon PyTorch (with MPS acceleration)
+    cmds:
+      - python3 -m venv {{.VENV_DIR}}
+      - "{{.PYTHON}} -m pip install --upgrade pip"
+      - "{{.PYTHON}} -m pip install torch torchaudio"
+      - "{{.PYTHON}} -m pip install -r requirements.txt"
+    status:
+      - test -f {{.PYTHON}}
+
+  dataset-mini:
+    desc: Download a tiny, lightweight subset of Italian speech (200 samples) for rapid pipeline testing
+    deps: [setup]
+    cmds:
+      - |
+        {{.PYTHON}} -c "
+        from datasets import load_dataset, Audio, DatasetDict
+        import os
+        print('📥 Fetching 200 clean Italian samples from the dev split...')
+        try:
+            ds = load_dataset('facebook/multilingual_librispeech', 'italian', split='dev')
+            mini_ds = ds.select(range(min(200, len(ds))))
+            mini_ds = mini_ds.cast_column('audio', Audio(sampling_rate=16000))
+            os.makedirs('{{.MINI_DATA_DIR}}', exist_ok=True)
+            dd = DatasetDict({'train': mini_ds, 'test': mini_ds})
+            dd.save_to_disk('{{.MINI_DATA_DIR}}')
+            print('✅ Mini dataset successfully compiled at: {{.MINI_DATA_DIR}}')
+        except Exception as e:
+            print(f'❌ Error downloading dataset: {e}')
+        "
+    status:
+      - test -d {{.MINI_DATA_DIR}}
+
+  config-mini:
+    desc: Auto-generate the configuration pointing to your local mini Italian dataset
+    cmds:
+      - mkdir -p configs
+      - |
+        cat << 'EOF' > {{.MINI_CONFIG_PATH}}
+        model:
+        name: "UsefulSensors/moonshine-tiny"
+
+        dataset:
+          name: "{{.MINI_DATA_DIR}}"
+          language: "italian"
+          train_split: "train"
+          test_split: "test"
+          text_column: "text"
+
+        audio:
+          min_duration: 1.0
+          max_duration: 30.0
+           sampling_rate: 16000
+
+        curriculum:
+          enabled: false
+
+        training:
+          output_dir: "{{.MINI_OUTPUT_DIR}}"
+          batch_size: 8
+          num_train_epochs: 5
+          learning_rate: 5e-5
+          warmup_steps: 10
+        EOF
+    status:
+      - test -f {{.MINI_CONFIG_PATH}}
+
+  train-mini:
+    desc: Run a rapid \"smoke test\" training loop using your local micro dataset
+    deps: [dataset-mini, config-mini]
+    cmds:
+      - "{{.PYTHON}} train.py --config {{.MINI_CONFIG_PATH}}"
+
+  segment:
+    desc: "[HEAVY] Download and segment the full production-scale Italian MLS dataset"
+    deps: [setup]
+    cmds:
+      - |
+        {{.PYTHON}} scripts/intelligent_segmentation.py \
+          --dataset facebook/multilingual_librispeech \
+          --language italian \
+          --output {{.DATA_DIR}} \
+          --max-duration 10.0 \
+          --min-duration 1.0
+    status:
+      - test -d {{.DATA_DIR}}
+
+  config:
+    desc: Auto-generate the full production fine-tuning YAML configuration file optimized for 24GB RAM
+    cmds:
+      - mkdir -p configs
+      - |
+        cat << 'EOF' > {{.CONFIG_PATH}}
+        dataset:
+          name: "facebook/multilingual_librispeech"
+          language: "italian"
+          train_split: "train"
+          test_split: "test"
+          text_column: "text"
+
+        curriculum:
+          enabled: true
+          current_phase: 1
+
+        training:
+          output_dir: "{{.OUTPUT_DIR}}"
+          num_train_epochs: 3
+          per_device_train_batch_size: 32
+          learning_rate: 5e-5
+          warmup_steps: 500
+        EOF
+    status:
+      - test -f {{.CONFIG_PATH}}
+
+  train:
+    desc: "[HEAVY] Launch full production fine-tuning over the complete dataset"
+    deps: [segment, config]
+    cmds:
+      - "{{.PYTHON}} train.py --config {{.CONFIG_PATH}}"
+
+  export-mini:
+    desc: Convert your mini-trained test weights into an ONNX model graph
+    cmds:
+      - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.MINI_OUTPUT_DIR}}/checkpoint-best"
+
+  clean:
+    desc: Nuke virtual environments, local datasets, and saved weights
+    cmds:
+      - rm -rf {{.VENV_DIR}} {{.DATA_DIR}} {{.MINI_DATA_DIR}} {{.OUTPUT_DIR}} {{.MINI_OUTPUT_DIR}}

@@ -1,0 +1,57 @@
+model:
+  name: "UsefulSensors/moonshine-tiny"
+
+dataset:
+  name: "./data/italian_phoneme_local"
+  language: "it"
+  train_split: "train"
+  test_split: "train"
+  text_column: "text"
+  use_auth_token: false
+
+# AGGIUNGI QUESTA SEZIONE MANCANTE
+audio:
+  min_duration: 0.5
+  max_duration: 30.0
+
+curriculum:
+  enabled: false
+
+training:
+  output_dir: "./results-moonshine-it-phoneme"
+  
+  # Parametri di base
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  num_train_epochs: 3
+  learning_rate: 0.00005
+  warmup_steps: 5
+  
+  # Configurazione gruppi e lunghezze
+  group_by_length: true
+  length_column_name: "input_length" 
+
+  # Ottimizzazione memoria
+  gradient_checkpointing: false
+  fp16: false
+  bf16: true
+  fp16_full_eval: false
+
+  # Strategie di valutazione e salvataggio
+  eval_strategy: "steps"
+  eval_steps: 500
+  save_steps: 500
+  logging_steps: 100
+  predict_with_generate: true
+
+  # Selezione miglior modello
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+
+  # Logging
+  report_to: "tensorboard"
+  logging_dir: "./results-moonshine-it-phoneme/logs"
+  
