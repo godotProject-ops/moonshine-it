@@ -612,6 +612,8 @@ Examples:
                        help='Directory to save checkpoints for resume capability (default: None = no checkpointing)')
     parser.add_argument('--checkpoint-interval', type=int, default=100,
                        help='Save checkpoint every N samples (default: 100)')
+    parser.add_argument('--test-size', type=float, default=0.1,
+                       help='Fraction of segments held out for the test split (default: 0.1)')
 
     args = parser.parse_args()
 
@@ -680,6 +682,18 @@ Examples:
         print("\n[ERROR] Processing failed. Exiting.")
         exit(1)
 
+    # Split into train/test so the training data loader (which expects a
+    # DatasetDict with 'train' and 'test' splits) can consume it directly.
+    if len(processed) >= 2 and 0.0 < args.test_size < 1.0:
+        processed = processed.train_test_split(test_size=args.test_size, seed=42)
+        print(f"[OK] Split into train ({len(processed['train']):,}) / "
+              f"test ({len(processed['test']):,}) segments")
+    else:
+        # Too few segments to split (e.g. tiny --test-mode run): reuse all for both.
+        processed = DatasetDict({"train": processed, "test": processed})
+        print(f"[WARN] Not enough segments to split; using all {len(processed['train']):,} "
+              f"for both train and test")
+
     # Save dataset
     print(f"Saving to {args.output_dir}...")
     try:
@@ -708,7 +722,7 @@ Examples:
     print("COMPLETE!")
     print("="*80)
     print(f"Segmented dataset saved to: {args.output_dir}")
-    print(f"Total segments: {len(processed):,}")
+    print(f"Total segments: {sum(len(split) for split in processed.values()):,}")
     print(f"\nTo use this dataset in training, update your config:")
     print(f"""
 dataset:

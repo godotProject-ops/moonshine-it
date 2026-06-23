@@ -183,6 +183,13 @@ class MoonshineSeq2SeqTrainer(Seq2SeqTrainer):
         has_labels = "labels" in inputs
         inputs = self._prepare_inputs(inputs)
 
+        # Match audio input dtype to the model weights. With bf16/fp16 the
+        # encoder conv weights may be half-precision while input_values stay
+        # fp32 (e.g. during the standalone evaluate() after load_best_model_at_end,
+        # which runs outside the trainer's autocast context) -> dtype mismatch.
+        if "input_values" in inputs and inputs["input_values"].is_floating_point():
+            inputs["input_values"] = inputs["input_values"].to(model.dtype)
+
         # Calculate generation parameters based on audio length
         # Paper: Training instances in [4, 30] seconds
         if 'input_values' in inputs:
@@ -252,6 +259,12 @@ def main():
         config = yaml.safe_load(f)
 
     print(f"\nConfiguration loaded from: {args.config}")
+
+    # Enable TF32 matmul/cuDNN on Ampere+ GPUs (free speedup, opt-in via config)
+    if config.get('training', {}).get('tf32', False) and torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print("[OK] TF32 enabled for CUDA matmul and cuDNN")
 
     # Override config with command-line arguments
     if args.no_curriculum:
@@ -333,42 +346,9 @@ def main():
     print("="*60)
 
     data_loader = MoonshineDataLoader.from_config(config)
-    #dataset_dict = data_loader.load_dataset()
-    # Sostituzione della riga 333
-    from datasets import load_from_disk
-    dataset_local = load_from_disk("./data/italian_phoneme_local")
-    
-
-
-    
-    from datasets import load_from_disk, DatasetDict
-    
-    # 1. Carica il dataset locale
-    dataset_local = load_from_disk("./data/italian_phoneme_local")
-    
-    # 2. Rinomina la colonna se necessario
-    if 'sentence' not in dataset_local.column_names and 'transcript' in dataset_local.column_names:
-        dataset_local = dataset_local.rename_column('transcript', 'sentence')
-
-    # 3. Crea l'oggetto DatasetDict formale
-    # Assicuriamoci che abbia i metodi richiesti dal framework
-    dataset_dict = DatasetDict({
-        "train": dataset_local,
-        "test": dataset_local 
-    })
-    
-    print("🚀 DatasetDict creato correttamente. Pronti per il salvataggio.")
-
-
-
-    # Rinominazione corretta in base al tuo dataset
-    for split in dataset_dict:
-        # Scegli 'transcript' se vuoi trascrizione normale, o 'phoneme' per i fonemi
-        target_col = 'transcript' 
-        
-        if 'sentence' not in dataset_dict[split].column_names and target_col in dataset_dict[split].column_names:
-            dataset_dict[split] = dataset_dict[split].rename_column(target_col, 'sentence')
-            print(f"✅ Rinominata colonna '{target_col}' in 'sentence' per lo split: {split}")
+    # Config-driven load: dataset.type/path/text_column come from the YAML.
+    # load_local() handles the transcript->sentence rename and audio resampling.
+    dataset_dict = data_loader.load_dataset()
 
     # Test mode: use only 500 samples (enough to get samples in various duration ranges)
     if args.test_mode:
@@ -481,6 +461,11 @@ def main():
         for key, value in gen_config.items():
             setattr(model.generation_config, key, value)
 
+        # prediction_step always passes a per-sample max_new_tokens; clearing the
+        # model's default max_length avoids the noisy "both max_new_tokens and
+        # max_length seem to have been set" warning on every generated sample.
+        model.generation_config.max_length = None
+
         print(f"\n[OK] Generation config:")
         print(f"  Repetition penalty: {model.generation_config.repetition_penalty}")
         print(f"  Num beams: {model.generation_config.num_beams}")
@@ -557,8 +542,11 @@ def main():
     # ============================================
     train_config = config['training']
 
-    # Override with phase-specific and CLI args
-    max_steps = args.max_steps or phase.max_steps
+    # Override with phase-specific and CLI args.
+    # Precedence: CLI --max-steps > config max_steps > curriculum phase.
+    # max_steps=-1 means "ignore steps, train for num_train_epochs" (HF convention).
+    max_steps = args.max_steps or train_config.get('max_steps', phase.max_steps)
+    num_train_epochs = train_config.get('num_train_epochs', 3)
     learning_rate = float(phase.learning_rate)
 
     training_args = Seq2SeqTrainingArguments(
@@ -576,16 +564,24 @@ def main():
         warmup_steps=train_config.get('warmup_steps', phase.warmup_steps),  # Allow override from config
         max_grad_norm=train_config['max_grad_norm'],
         max_steps=max_steps,
+        num_train_epochs=num_train_epochs,
         label_smoothing_factor=phase.label_smoothing,
 
         # Length bucketing (paper recommendation: groups similar-length audio)
         # group_by_length=train_config['group_by_length'],
         # length_column_name=train_config['length_column_name'],
 
-        # Memory optimization
+        # Memory optimization / mixed precision
         gradient_checkpointing=train_config['gradient_checkpointing'],
         fp16=train_config['fp16'],
+        bf16=train_config.get('bf16', False),
         fp16_full_eval=train_config.get('fp16_full_eval', True),
+        bf16_full_eval=train_config.get('bf16_full_eval', False),
+
+        # Dataloader throughput
+        dataloader_num_workers=train_config.get('dataloader_num_workers', 0),
+        dataloader_pin_memory=train_config.get('dataloader_pin_memory', True),
+        dataloader_persistent_workers=train_config.get('dataloader_persistent_workers', False),
 
         # Evaluation
         eval_strategy=train_config['eval_strategy'],
@@ -672,7 +668,7 @@ def main():
             print(f"\n⚠️  Final evaluation skipped due to dtype mismatch (this is a known issue with FP16 training)")
             print(f"Your model was saved successfully to: {training_args.output_dir}/final")
             print(f"\nYou can evaluate it separately with:")
-            print(f"  python scripts/evaluate.py --model {training_args.output_dir}/final --dataset {config['dataset']['name']} --split test")
+            print(f"  python scripts/evaluate.py --model {training_args.output_dir}/final --dataset {config['dataset'].get('path', config['dataset'].get('name'))} --split test")
             results = None
         else:
             raise

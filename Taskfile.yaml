@@ -8,7 +8,7 @@ vars:
   DATA_DIR: ./data/mls_italian_segmented
   MINI_DATA_DIR: ./data/italian_mini
   OUTPUT_DIR: ./results-moonshine-it
-  MINI_OUTPUT_DIR: ./results-moonshine-it-mini
+  MINI_OUTPUT_DIR: ./results-moonshine-it-phoneme
   CONFIG_PATH: configs/my_italian_model.yaml
   MINI_CONFIG_PATH: configs/my_italian_model_mini.yaml
 
@@ -19,11 +19,13 @@ tasks:
     silent: true
 
   setup:
-    desc: Create local virtual environment and install native Apple Silicon PyTorch (with MPS acceleration)
+    desc: Create local virtual environment and install PyTorch + torchcodec for NVIDIA CUDA GPUs
     cmds:
       - python3 -m venv {{.VENV_DIR}}
       - "{{.PYTHON}} -m pip install --upgrade pip"
-      - "{{.PYTHON}} -m pip install torch torchaudio"
+      # Default PyPI wheels are CUDA-enabled on Linux. torchcodec is the audio
+      # decoder backend the `datasets` library now requires (not torchaudio).
+      - "{{.PYTHON}} -m pip install torch torchaudio torchcodec"
       - "{{.PYTHON}} -m pip install -r requirements.txt"
     status:
       - test -f {{.PYTHON}}
@@ -52,35 +54,76 @@ tasks:
       - test -d {{.MINI_DATA_DIR}}
 
   config-mini:
-    desc: Auto-generate the configuration pointing to your local mini Italian dataset
+    desc: Auto-generate the GPU-tuned mini config (bf16/TF32/fused AdamW) pointing to your local Italian dataset
     cmds:
       - mkdir -p configs
       - |
         cat << 'EOF' > {{.MINI_CONFIG_PATH}}
         model:
-        name: "UsefulSensors/moonshine-tiny"
+          name: "UsefulSensors/moonshine-tiny"
 
         dataset:
-          name: "{{.MINI_DATA_DIR}}"
-          language: "italian"
+          type: "local"                      # use load_from_disk, NOT a hub download
+          path: "{{.MINI_DATA_DIR}}"
+          language: "it"
           train_split: "train"
           test_split: "test"
-          text_column: "text"
+          text_column: "transcript"          # real column name in this dataset
+          use_auth_token: false
 
         audio:
-          min_duration: 1.0
+          sampling_rate: 16000
+          min_duration: 0.5
           max_duration: 30.0
-           sampling_rate: 16000
 
         curriculum:
           enabled: false
 
         training:
           output_dir: "{{.MINI_OUTPUT_DIR}}"
-          batch_size: 8
-          num_train_epochs: 5
-          learning_rate: 5e-5
-          warmup_steps: 10
+
+          # Batch sizing for RTX 3060 12 GB + moonshine-tiny (~7 GB used at bs=16)
+          per_device_train_batch_size: 16
+          per_device_eval_batch_size: 8
+          gradient_accumulation_steps: 1
+          max_grad_norm: 1.0
+          num_train_epochs: 3
+          max_steps: -1                      # -1 => use num_train_epochs
+          learning_rate: 0.00005
+          warmup_steps: 5
+
+          # Optimizer
+          optim: "adamw_torch_fused"
+          lr_scheduler_type: "linear"
+          group_by_length: true
+          length_column_name: "input_length"
+
+          # Mixed precision: bf16 + TF32 are the right path on Ampere (sm_86)
+          gradient_checkpointing: false
+          fp16: false
+          bf16: true
+          bf16_full_eval: true
+          fp16_full_eval: false
+          tf32: true
+
+          # Dataloader throughput (32-core host)
+          dataloader_num_workers: 8
+          dataloader_pin_memory: true
+          dataloader_persistent_workers: true
+
+          # Eval / save / logging (tuned for the ~39-step mini run)
+          eval_strategy: "steps"
+          eval_steps: 10
+          save_steps: 10
+          logging_steps: 5
+          predict_with_generate: true
+
+          load_best_model_at_end: true
+          metric_for_best_model: "wer"
+          greater_is_better: false
+
+          report_to: "tensorboard"
+          logging_dir: "{{.MINI_OUTPUT_DIR}}/logs"
         EOF
     status:
       - test -f {{.MINI_CONFIG_PATH}}
@@ -89,7 +132,7 @@ tasks:
     desc: Run a rapid \"smoke test\" training loop using your local micro dataset
     deps: [dataset-mini, config-mini]
     cmds:
-      - "{{.PYTHON}} train.py --config {{.MINI_CONFIG_PATH}}"
+      - "{{.PYTHON}} train.py --config {{.MINI_CONFIG_PATH}} --no-curriculum"
 
   segment:
     desc: "[HEAVY] Download and segment the full production-scale Italian MLS dataset"
@@ -106,17 +149,27 @@ tasks:
       - test -d {{.DATA_DIR}}
 
   config:
-    desc: Auto-generate the full production fine-tuning YAML configuration file optimized for 24GB RAM
+    desc: Auto-generate the full production fine-tuning YAML, tuned to fit a 12GB NVIDIA GPU (RTX 3060)
     cmds:
       - mkdir -p configs
       - |
         cat << 'EOF' > {{.CONFIG_PATH}}
+        model:
+          name: "UsefulSensors/moonshine-base"   # switch to moonshine-tiny for more headroom
+
         dataset:
-          name: "facebook/multilingual_librispeech"
-          language: "italian"
+          type: "local"                          # consume the segmented dataset on disk
+          path: "{{.DATA_DIR}}"
+          language: "it"
           train_split: "train"
           test_split: "test"
-          text_column: "text"
+          text_column: "transcript"
+          use_auth_token: false
+
+        audio:
+          sampling_rate: 16000
+          min_duration: 1.0
+          max_duration: 30.0
 
         curriculum:
           enabled: true
@@ -124,10 +177,51 @@ tasks:
 
         training:
           output_dir: "{{.OUTPUT_DIR}}"
+
+          # 12GB budget: moonshine-base does not fit at bs=32, so use a small
+          # per-device batch + gradient accumulation to keep the effective
+          # batch at 32, and gradient checkpointing to trade compute for VRAM.
+          per_device_train_batch_size: 8
+          per_device_eval_batch_size: 4
+          gradient_accumulation_steps: 4        # effective batch = 32
+          gradient_checkpointing: true          # ~20-30% slower, large VRAM saving
+          max_grad_norm: 1.0
           num_train_epochs: 3
-          per_device_train_batch_size: 32
+          max_steps: -1                         # -1 => use num_train_epochs
           learning_rate: 5e-5
           warmup_steps: 500
+
+          # Optimizer
+          optim: "adamw_torch_fused"
+          lr_scheduler_type: "linear"
+          group_by_length: true
+          length_column_name: "input_length"
+
+          # Mixed precision: bf16 + TF32 on Ampere (sm_86)
+          fp16: false
+          bf16: true
+          bf16_full_eval: true
+          fp16_full_eval: false
+          tf32: true
+
+          # Dataloader throughput (32-core host)
+          dataloader_num_workers: 8
+          dataloader_pin_memory: true
+          dataloader_persistent_workers: true
+
+          # Eval / save / logging (full-dataset cadence)
+          eval_strategy: "steps"
+          eval_steps: 500
+          save_steps: 500
+          logging_steps: 100
+          predict_with_generate: true
+
+          load_best_model_at_end: true
+          metric_for_best_model: "wer"
+          greater_is_better: false
+
+          report_to: "tensorboard"
+          logging_dir: "{{.OUTPUT_DIR}}/logs"
         EOF
     status:
       - test -f {{.CONFIG_PATH}}
@@ -141,7 +235,7 @@ tasks:
   export-mini:
     desc: Convert your mini-trained test weights into an ONNX model graph
     cmds:
-      - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.MINI_OUTPUT_DIR}}/checkpoint-best"
+      - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.MINI_OUTPUT_DIR}}/final"
 
   clean:
     desc: Nuke virtual environments, local datasets, and saved weights

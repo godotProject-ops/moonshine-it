@@ -2,15 +2,16 @@ model:
   name: "UsefulSensors/moonshine-tiny"
 
 dataset:
-  name: "./data/italian_phoneme_local"
+  type: "local"                      # use load_from_disk, NOT Common Voice download
+  path: "./data/italian_mini"        # actual dataset on disk (200 train / 200 test)
   language: "it"
   train_split: "train"
-  test_split: "train"
-  text_column: "text"
+  test_split: "test"
+  text_column: "transcript"          # real column name in this dataset
   use_auth_token: false
 
-# AGGIUNGI QUESTA SEZIONE MANCANTE
 audio:
+  sampling_rate: 16000
   min_duration: 0.5
   max_duration: 30.0
 
@@ -19,34 +20,48 @@ curriculum:
 
 training:
   output_dir: "./results-moonshine-it-phoneme"
-  
-  # Parametri di base
-  per_device_train_batch_size: 4
-  per_device_eval_batch_size: 4
-  gradient_accumulation_steps: 1
+
+  # ---- Batch sizing (RTX 3060 12 GB, moonshine-tiny ~27M params) ----
+  # Tiny model leaves plenty of VRAM; bigger batches = better GPU utilization.
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 8      # eval uses generate() -> heavier, keep lower
+  gradient_accumulation_steps: 1     # effective batch = 16 (dataset is only 200 samples)
   max_grad_norm: 1.0
   num_train_epochs: 3
+  max_steps: -1                      # -1 => use num_train_epochs (else max_steps wins)
   learning_rate: 0.00005
   warmup_steps: 5
-  
-  # Configurazione gruppi e lunghezze
-  group_by_length: true
-  length_column_name: "input_length" 
 
-  # Ottimizzazione memoria
-  gradient_checkpointing: false
+  # ---- Optimizer: fused CUDA AdamW is faster on GPU ----
+  optim: "adamw_torch_fused"
+  lr_scheduler_type: "linear"
+
+  # Length bucketing (currently commented out in train.py)
+  group_by_length: true
+  length_column_name: "input_length"
+
+  # ---- Mixed precision: bf16 is the right choice for Ampere (sm_86) ----
+  # bf16 has fp32 dynamic range -> no loss scaling, more stable than fp16.
+  gradient_checkpointing: false      # have VRAM to spare -> keep off for speed
   fp16: false
   bf16: true
+  bf16_full_eval: true
   fp16_full_eval: false
+  tf32: true                         # ~1.5-2x matmul speedup on Ampere, negligible accuracy cost
 
-  # Strategie di valutazione e salvataggio
+  # ---- Dataloader throughput (machine has 32 CPU cores) ----
+  dataloader_num_workers: 8
+  dataloader_pin_memory: true
+  dataloader_persistent_workers: true
+
+  # ---- Eval / save / logging (tuned for ~36 total steps on this small set) ----
   eval_strategy: "steps"
-  eval_steps: 500
-  save_steps: 500
-  logging_steps: 100
+  eval_steps: 10
+  save_steps: 10
+  logging_steps: 5
   predict_with_generate: true
 
-  # Selezione miglior modello
+  # Best-model selection
   load_best_model_at_end: true
   metric_for_best_model: "wer"
   greater_is_better: false
@@ -54,4 +69,3 @@ training:
   # Logging
   report_to: "tensorboard"
   logging_dir: "./results-moonshine-it-phoneme/logs"
-  
