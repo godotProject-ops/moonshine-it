@@ -6,38 +6,69 @@ By leveraging the monolingual approach outlined in the *"Flavors of Moonshine"* 
 
 ---
 
-## 🚀 Quick Start Pipeline
+## 🚀 Quick Start
 
-We use [Task](https://taskfile.dev/) to automate the entire environment setup, dataset preparation, and training pipeline.
+### Prerequisiti
+
+- **Python 3.10+**
+- **[Task](https://taskfile.dev/)** — `brew install go-task` (macOS) oppure `snap install task` (Linux)
+- ~12 GB di spazio su disco per il dataset completo
+
+### 1. Ambiente e dipendenze
 
 ```bash
-# 1. Bootstrap the project (Creates virtual environment & installs dependencies)
 task setup
-
-# 2. Download a tiny mini dataset (200 Italian samples) for rapid testing
-task dataset-mini
-
-# 3. Generate the mini configuration pointing to the local dataset
-task config-mini
-
-# 4. Run a rapid "smoke test" training loop using the mini dataset
-task train-mini
-
-# 5. Download and segment the full production-scale Italian MLS dataset
-task segment
-
-# 6. Generate the full production configuration
-task config
-
-# 7. Launch full production fine-tuning over the complete dataset
-task train
-
-# 8. Convert trained weights to ONNX for deployment
-task export-mini
-
-# 9. Nuke everything (venv, datasets, checkpoints)
-task clean
 ```
+
+Crea un virtual environment (`.venv/`) e installa PyTorch con accelerazione MPS (Apple Silicon) o CUDA.
+
+### 2. Mini test (200 campioni, ~2 minuti)
+
+Prova l'intera pipeline con un dataset microscopico per verificare che tutto funzioni:
+
+```bash
+task dataset-mini    # Scarica 200 campioni italiani
+task train-mini      # Allena per 3 epoche su 200 campioni
+```
+
+Il modello viene salvato in `results-moonshine-it-phoneme/final/`.
+
+### 3. Training completo (produzione)
+
+Per allenare sul dataset integrale **Multilingual LibriSpeech (Italian)**:
+
+```bash
+task segment         # Scarica e segmenta il dataset (~7 GB, richiede tempo)
+task train           # Allena moonshine-base per 3 epoche
+```
+
+### 4. Deploy (ONNX)
+
+```bash
+task export-mini     # Converte i pesi del modello mini in ONNX
+```
+
+### Reset
+
+```bash
+task clean           # Rimuove venv, dataset, e tutti i risultati
+```
+
+---
+
+## 📖 Comandi
+
+| Comando | Cosa fa |
+|---------|---------|
+| `task setup` | Prepara l'ambiente virtuale |
+| `task dataset-mini` | Scarica 200 campioni italiani per test |
+| `task config-mini` | Genera config per mini dataset |
+| `task train-mini` | Allena su 200 campioni (~2 min) |
+| `task segment` | Scarica e segmenta MLS italiano (~7 GB) |
+| `task config` | Genera config per produzione |
+| `task train` | Allena su dataset completo (3 epoche) |
+| `task export-mini` | Esporta modello mini in ONNX |
+| `task clean` | Cancella tutto (venv, dati, risultati) |
 
 ---
 
@@ -59,24 +90,6 @@ task clean
 ├── Taskfile.yaml                # Task automation definitions
 └── requirements.txt             # Python dependencies
 ```
-
----
-
-## 🧪 Quick Commands
-
-| Command | What it does |
-|---------|-------------|
-| `task setup` | Create venv, install torch + deps |
-| `task dataset-mini` | Download 200 Italian samples |
-| `task config-mini` | Generate mini YAML config |
-| `task train-mini` | Train on mini dataset (5 epochs) |
-| `task segment` | Download & segment full MLS (heavy) |
-| `task config` | Generate production YAML config |
-| `task train` | Full production training (3 epochs) |
-| `task export-mini` | Export mini-trained model to ONNX |
-| `task clean` | Remove everything |
-
----
 
 ## ⚙️ Custom Training
 
