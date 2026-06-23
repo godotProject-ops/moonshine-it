@@ -591,7 +591,7 @@ Examples:
     parser.add_argument('--output-dir', default='./data/mls_french_intelligent',
                        help='Output directory for processed dataset')
     parser.add_argument('--cache-dir',
-                       default='Z:/HarryPotterCrowdsourcing/Moonshine paper/.cache/huggingface',
+                       default='./.cache/huggingface',
                        help='HuggingFace cache directory')
     parser.add_argument('--target-duration', type=float, default=7.5,
                        help='Target segment duration in seconds (default: 7.5)')
@@ -639,14 +639,21 @@ Examples:
     else:
         compute_type = "float16"
 
+    # Map the ISO language code (used by WhisperX) to the MLS dataset config name.
+    MLS_CONFIG = {
+        'it': 'italian', 'fr': 'french', 'de': 'german', 'es': 'spanish',
+        'nl': 'dutch', 'pt': 'portuguese', 'pl': 'polish', 'en': 'english',
+    }
+    mls_config = MLS_CONFIG.get(args.language, args.language)
+
     # Load dataset
-    print("\nLoading Multilingual LibriSpeech French...")
+    print(f"\nLoading Multilingual LibriSpeech ({mls_config})...")
     split = "train[:100]" if args.test_mode else "train"
 
     try:
         dataset = load_dataset(
             'facebook/multilingual_librispeech',
-            'french',
+            mls_config,
             split=split,
             cache_dir=f"{args.cache_dir}/datasets"
         )

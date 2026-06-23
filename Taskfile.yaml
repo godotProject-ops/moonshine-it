@@ -5,6 +5,11 @@ version: '3'
 vars:
   VENV_DIR: .venv
   PYTHON: "{{.VENV_DIR}}/bin/python"
+  # WhisperX is incompatible with Python 3.14, so segmentation runs in its own
+  # Python 3.12 venv. Training reads the resulting Arrow dataset, so the main
+  # venv never needs whisperx.
+  SEG_VENV_DIR: .venv-seg
+  SEG_PYTHON: "{{.SEG_VENV_DIR}}/bin/python"
   DATA_DIR: ./data/mls_italian_segmented
   MINI_DATA_DIR: ./data/italian_mini
   OUTPUT_DIR: ./results-moonshine-it
@@ -134,15 +139,24 @@ tasks:
     cmds:
       - "{{.PYTHON}} train.py --config {{.MINI_CONFIG_PATH}} --no-curriculum"
 
+  seg-setup:
+    desc: Create the Python 3.12 venv for WhisperX segmentation (incompatible with the 3.14 training venv)
+    cmds:
+      - python3.12 -m venv {{.SEG_VENV_DIR}}
+      - "{{.SEG_PYTHON}} -m pip install --upgrade pip"
+      - "{{.SEG_PYTHON}} -m pip install whisperx datasets soundfile librosa"
+    status:
+      - "{{.SEG_PYTHON}} -c 'import whisperx, datasets'"
+
   segment:
     desc: "[HEAVY] Download and segment the full production-scale Italian MLS dataset"
-    deps: [setup]
+    deps: [seg-setup]
     cmds:
       - |
-        {{.PYTHON}} scripts/intelligent_segmentation.py \
-          --dataset facebook/multilingual_librispeech \
-          --language italian \
-          --output {{.DATA_DIR}} \
+        {{.SEG_PYTHON}} scripts/intelligent_segmentation.py \
+          --language it \
+          --output-dir {{.DATA_DIR}} \
+          --cache-dir ./.cache/huggingface \
           --max-duration 10.0 \
           --min-duration 1.0
     status:
@@ -240,4 +254,4 @@ tasks:
   clean:
     desc: Nuke virtual environments, local datasets, and saved weights
     cmds:
-      - rm -rf {{.VENV_DIR}} {{.DATA_DIR}} {{.MINI_DATA_DIR}} {{.OUTPUT_DIR}} {{.MINI_OUTPUT_DIR}}
+      - rm -rf {{.VENV_DIR}} {{.SEG_VENV_DIR}} {{.DATA_DIR}} {{.MINI_DATA_DIR}} {{.OUTPUT_DIR}} {{.MINI_OUTPUT_DIR}}
