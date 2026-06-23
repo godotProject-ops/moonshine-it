@@ -57,6 +57,23 @@ task clean           # Rimuove venv, dataset, e tutti i risultati
 
 ---
 
+## 📊 Confronto: Mini vs Produzione
+
+| Caratteristica | `task train-mini` | `task train` |
+|---|---|---|
+| **Modello** | `moonshine-tiny` (27M params) | `moonshine-base` (87M params) |
+| **Dataset** | 200 campioni (MLS dev) | ~300h MLS italiano segmentato |
+| **Tempo stimato** | ~2 minuti | ~ore/giorni |
+| **Batch** | 4 | 8 (con grad_accum 4 → effettivo 32) |
+| **Gradient checkpointing** | ❌ No | ✅ Sì |
+| **Mixed precision** | `bf16` + `tf32` | `bf16` + `tf32` |
+| **Dataloader workers** | — | 8 |
+| **Output** | `results-moonshine-it-phoneme/final/` | `results-moonshine-it/final/` |
+| **Scopo** | Smoke test / sviluppo | Training production |
+| **Config** | `configs/my_italian_model_mini.yaml` | `configs/my_italian_model.yaml` |
+
+---
+
 ## 📖 Comandi
 
 | Comando | Cosa fa |
