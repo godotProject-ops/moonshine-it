@@ -46,6 +46,7 @@ task train           # Allena moonshine-base per 3 epoche
 
 ```bash
 task export-mini     # Converte i pesi del modello mini in ONNX
+task export          # Converte i pesi del modello full in ONNX
 ```
 
 ### Reset
@@ -68,6 +69,7 @@ task clean           # Rimuove venv, dataset, e tutti i risultati
 | `task config` | Genera config per produzione |
 | `task train` | Allena su dataset completo (3 epoche) |
 | `task export-mini` | Esporta modello mini in ONNX |
+| `task export` | Esporta modello full in ONNX |
 | `task clean` | Cancella tutto (venv, dati, risultati) |
 
 ---

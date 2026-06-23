@@ -143,6 +143,11 @@ tasks:
     cmds:
       - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.MINI_OUTPUT_DIR}}/checkpoint-best"
 
+  export:
+    desc: Convert your full production weights into an ONNX model graph
+    cmds:
+      - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.OUTPUT_DIR}}/final"
+
   clean:
     desc: Nuke virtual environments, local datasets, and saved weights
     cmds:
