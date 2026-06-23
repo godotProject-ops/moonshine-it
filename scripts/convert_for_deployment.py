@@ -101,6 +101,48 @@ class ModelConverter:
         print(f"STEP {step_num}/{total_steps}: {description}")
         print(f"{'='*80}\n")
 
+    @staticmethod
+    def _patch_tokenizer_config(model_path: Path):
+        """
+        Temporarily remove 'tokenizer_class' from tokenizer_config.json so that
+        AutoProcessor can load Moonshine's tokenizer (saved as 'TokenizersBackend',
+        which is not recognised by the installed transformers version).
+
+        The original config is restored immediately after use via _restore_tokenizer_config().
+        """
+        tcfg_path = model_path / "tokenizer_config.json"
+        if not tcfg_path.exists():
+            return
+
+        with open(tcfg_path, 'r') as f:
+            tcfg = json.load(f)
+
+        tcfg.setdefault('_original_tokenizer_class', tcfg.pop('tokenizer_class', None))
+
+        with open(tcfg_path, 'w') as f:
+            json.dump(tcfg, f)
+
+        original_cls = tcfg.get('_original_tokenizer_class')
+        if original_cls:
+            print(f"  Patched tokenizer_config.json (removed tokenizer_class='{original_cls}')")
+
+    @staticmethod
+    def _restore_tokenizer_config(model_path: Path):
+        """Restore 'tokenizer_class' in tokenizer_config.json after loading."""
+        tcfg_path = model_path / "tokenizer_config.json"
+        if not tcfg_path.exists():
+            return
+
+        with open(tcfg_path, 'r') as f:
+            tcfg = json.load(f)
+
+        original_cls = tcfg.pop('_original_tokenizer_class', None)
+        if original_cls:
+            tcfg['tokenizer_class'] = original_cls
+
+        with open(tcfg_path, 'w') as f:
+            json.dump(tcfg, f)
+
     def extend_tokenizer(self) -> bool:
         """
         Extend tokenizer vocabulary to 32768 tokens.
@@ -112,11 +154,30 @@ class ModelConverter:
             print("Skipping tokenizer extension (--skip-tokenizer-extension)")
             return True
 
-        print(f"Loading tokenizer from: {self.model_path}")
-        processor = AutoProcessor.from_pretrained(str(self.model_path))
+        # Check real vocab size directly from tokenizer.json (more reliable
+        # than processor.tokenizer.vocab_size, which excludes added tokens).
+        tokenizer_json_path = self.model_path / "tokenizer.json"
+        if tokenizer_json_path.exists():
+            with open(tokenizer_json_path, 'r', encoding='utf-8') as f:
+                raw_vocab = json.load(f)['model']['vocab']
+            raw_vocab_size = len(raw_vocab)
+            print(f"Raw tokenizer.json vocab size: {raw_vocab_size}")
 
-        current_vocab_size = processor.tokenizer.vocab_size
-        print(f"Current vocab size: {current_vocab_size}")
+            if raw_vocab_size >= self.target_vocab_size:
+                print(f"Tokenizer already has {raw_vocab_size} tokens (>= {self.target_vocab_size})")
+                print("Skipping extension.")
+                return True
+
+        self._patch_tokenizer_config(self.model_path)
+        try:
+            print(f"Loading tokenizer from: {self.model_path}")
+            processor = AutoProcessor.from_pretrained(str(self.model_path))
+        finally:
+            self._restore_tokenizer_config(self.model_path)
+
+        # Use the backend tokenizer's real vocab size (includes added tokens)
+        current_vocab_size = processor.tokenizer.backend_tokenizer.get_vocab_size()
+        print(f"Current backend vocab size: {current_vocab_size}")
 
         if current_vocab_size >= self.target_vocab_size:
             print(f"Tokenizer already has {current_vocab_size} tokens (>= {self.target_vocab_size})")
@@ -183,8 +244,8 @@ class ModelConverter:
             shutil.copytree(self.model_path, self.model_resized_dir, dirs_exist_ok=True)
             return True
 
-        # Determine tokenizer path
-        if self.skip_tokenizer_extension:
+        # Determine tokenizer path: use extended dir only if it was actually created
+        if self.skip_tokenizer_extension or not self.tokenizer_extended_dir.exists():
             tokenizer_path = self.model_path
         else:
             tokenizer_path = self.tokenizer_extended_dir
@@ -193,13 +254,18 @@ class ModelConverter:
         model = MoonshineForConditionalGeneration.from_pretrained(str(self.model_path))
 
         print(f"Loading tokenizer from: {tokenizer_path}")
-        processor = AutoProcessor.from_pretrained(str(tokenizer_path))
+        self._patch_tokenizer_config(tokenizer_path)
+        try:
+            processor = AutoProcessor.from_pretrained(str(tokenizer_path))
+        finally:
+            self._restore_tokenizer_config(tokenizer_path)
 
         current_vocab_size = model.config.vocab_size
-        tokenizer_vocab_size = processor.tokenizer.vocab_size
+        # Use backend vocab size (includes added tokens like BOS/EOS/PAD)
+        tokenizer_vocab_size = processor.tokenizer.backend_tokenizer.get_vocab_size()
 
         print(f"Model vocab size: {current_vocab_size}")
-        print(f"Tokenizer vocab size: {tokenizer_vocab_size}")
+        print(f"Tokenizer backend vocab size: {tokenizer_vocab_size}")
 
         if current_vocab_size == tokenizer_vocab_size:
             print("Model and tokenizer vocab sizes match!")

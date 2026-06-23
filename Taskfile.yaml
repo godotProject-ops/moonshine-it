@@ -141,12 +141,12 @@ tasks:
   export-mini:
     desc: Convert your mini-trained test weights into an ONNX model graph
     cmds:
-      - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.MINI_OUTPUT_DIR}}/checkpoint-best"
+      - "{{.PYTHON}} scripts/convert_for_deployment.py --model results-moonshine-it-phoneme/final --output results-moonshine-it-phoneme/deployment"
 
   export:
     desc: Convert your full production weights into an ONNX model graph
     cmds:
-      - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.OUTPUT_DIR}}/final"
+      - "{{.PYTHON}} scripts/convert_for_deployment.py --model {{.OUTPUT_DIR}}/final --output {{.OUTPUT_DIR}}/deployment"
 
   clean:
     desc: Nuke virtual environments, local datasets, and saved weights
