@@ -1,0 +1,68 @@
+model:
+  name: "UsefulSensors/moonshine-base"   # switch to moonshine-tiny for more headroom
+
+dataset:
+  type: "local"                          # consume the segmented dataset on disk
+  path: "./data/mls_italian_segmented"
+  language: "it"
+  train_split: "train"
+  test_split: "test"
+  text_column: "transcript"
+  use_auth_token: false
+
+audio:
+  sampling_rate: 16000
+  min_duration: 1.0
+  max_duration: 30.0
+
+curriculum:
+  enabled: true
+  current_phase: 1
+
+training:
+  output_dir: "./results-moonshine-it"
+
+  # 12GB budget: moonshine-base does not fit at bs=32, so use a small
+  # per-device batch + gradient accumulation to keep the effective
+  # batch at 32, and gradient checkpointing to trade compute for VRAM.
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4        # effective batch = 32
+  gradient_checkpointing: true          # ~20-30% slower, large VRAM saving
+  max_grad_norm: 1.0
+  num_train_epochs: 3
+  max_steps: -1                         # -1 => use num_train_epochs
+  learning_rate: 5e-5
+  warmup_steps: 500
+
+  # Optimizer
+  optim: "adamw_torch_fused"
+  lr_scheduler_type: "linear"
+  group_by_length: true
+  length_column_name: "input_length"
+
+  # Mixed precision: bf16 + TF32 on Ampere (sm_86)
+  fp16: false
+  bf16: true
+  bf16_full_eval: true
+  fp16_full_eval: false
+  tf32: true
+
+  # Dataloader throughput (32-core host)
+  dataloader_num_workers: 8
+  dataloader_pin_memory: true
+  dataloader_persistent_workers: true
+
+  # Eval / save / logging (full-dataset cadence)
+  eval_strategy: "steps"
+  eval_steps: 500
+  save_steps: 500
+  logging_steps: 100
+  predict_with_generate: true
+
+  load_best_model_at_end: true
+  metric_for_best_model: "wer"
+  greater_is_better: false
+
+  report_to: "tensorboard"
+  logging_dir: "./results-moonshine-it/logs"
